@@ -1,0 +1,5 @@
+/target
+/.zig-cache
+/zig-out
+**/*.gz
+/src/static-pages/*.html
