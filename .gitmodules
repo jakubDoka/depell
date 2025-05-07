@@ -1,0 +1,3 @@
+[submodule "vendored/mumd"]
+	path = vendored/mumd
+	url = https://github.com/Ducklett/mumd.git

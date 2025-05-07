@@ -13,7 +13,7 @@ use {
     rand_core::OsRng,
     serde::{Deserialize, Serialize},
     std::{
-        collections::{HashMap, HashSet},
+        collections::HashMap,
         fmt::{Display, Write},
         net::Ipv4Addr,
     },
@@ -33,9 +33,9 @@ macro_rules! static_asset {
             axum::http::Response::builder()
                 .header("content-type", $mime)
                 .header("content-encoding", "gzip")
-                .body(axum::body::Body::from(Bytes::from_static(include_bytes!(concat!(
-                    $body, ".gz"
-                )))))
+                .body(axum::body::Body::from(Bytes::from_static(include_bytes!(
+                    concat!($body, ".gz")
+                ))))
                 .unwrap()
         })
     };
@@ -47,15 +47,31 @@ async fn amain() {
     let debug = cfg!(debug_assertions);
 
     log::set_logger(&Logger).unwrap();
-    log::set_max_level(if debug { log::LevelFilter::Warn } else { log::LevelFilter::Error });
+    log::set_max_level(if debug {
+        log::LevelFilter::Warn
+    } else {
+        log::LevelFilter::Error
+    });
 
     db::init();
 
     let router = axum::Router::new()
-        .route("/index.css", static_asset!("text/css", "index.css"))
-        .route("/index.js", static_asset!("text/javascript", "index.js"))
-        .route("/hbfmt.wasm", static_asset!("application/wasm", "hbfmt.wasm"))
-        .route("/hbc.wasm", static_asset!("application/wasm", "hbc.wasm"))
+        .route(
+            "/index.css",
+            static_asset!("text/css", "../zig-out/static/index.css"),
+        )
+        .route(
+            "/index.js",
+            static_asset!("text/javascript", "../zig-out/static/index.js"),
+        )
+        .route(
+            "/hbfmt.wasm",
+            static_asset!("application/wasm", "../zig-out/bin/hbfmt.wasm"),
+        )
+        .route(
+            "/hbc.wasm",
+            static_asset!("application/wasm", "../zig-out/bin/hbc.wasm"),
+        )
         .route("/", get(Index::page))
         .route("/index-view", get(Index::get_with_blog))
         .route("/blogs/index-view", get(Index::get))
@@ -95,8 +111,13 @@ async fn amain() {
 
     #[cfg(feature = "tls")]
     {
-        let addr =
-            (Ipv4Addr::UNSPECIFIED, std::env::var("DEPELL_PORT").unwrap().parse::<u16>().unwrap());
+        let addr = (
+            Ipv4Addr::UNSPECIFIED,
+            std::env::var("DEPELL_PORT")
+                .unwrap()
+                .parse::<u16>()
+                .unwrap(),
+        );
         let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
             std::env::var("DEPELL_CERT_PATH").unwrap(),
             std::env::var("DEPELL_KEY_PATH").unwrap(),
@@ -123,7 +144,9 @@ async fn fetch_code(
     let mut deps = HashMap::<String, String>::new();
     db::with(|db| {
         for path in &paths {
-            let Some((author, name)) = path.split_once('/') else { continue };
+            let Some((author, name)) = path.split_once('/') else {
+                continue;
+            };
             db.fetch_deps
                 .query_map((name, author), |r| {
                     Ok((
@@ -154,13 +177,18 @@ struct Before {
 
 impl Feed {
     async fn more(session: Session, axum::Form(data): axum::Form<Before>) -> Html<String> {
-        Self::Before { before_timestamp: data.before_timestamp }.render(&session)
+        Self::Before {
+            before_timestamp: data.before_timestamp,
+        }
+        .render(&session)
     }
 }
 
 impl Default for Feed {
     fn default() -> Self {
-        Self::Before { before_timestamp: now() + 3600 }
+        Self::Before {
+            before_timestamp: now() + 3600,
+        }
     }
 }
 
@@ -216,7 +244,7 @@ macro_rules! decl_static_pages {
 
             impl PublicPage for $name {
                 fn render_to_buf(self, buf: &mut String) {
-                    buf.push_str(include_str!(concat!("static-pages/", $file, ".html")));
+                    buf.push_str(include_str!(concat!("../zig-out/static/", $file, ".html")));
                 }
 
                 async fn page(session: Option<Session>) -> Html<String> {
@@ -263,7 +291,9 @@ struct Post {
 
 impl Page for Post {
     fn render_to_buf(self, session: &Session, buf: &mut String) {
-        let Self { name, code, error, .. } = self;
+        let Self {
+            name, code, error, ..
+        } = self;
         write_html! { (buf)
             <form id="postForm" "hx-post"="/post" "hx-swap"="outerHTML">
                 if let Some(e) = error { <div class="error">e</div> }
@@ -287,7 +317,7 @@ impl Page for Post {
             </div>
 
             <div>
-                !{include_str!("static-pages/post.html")}
+                !{include_str!("../zig-out/static/post.html")}
             </div>
         }
     }
@@ -330,7 +360,9 @@ impl Post {
         axum::Form(mut data): axum::Form<Self>,
     ) -> Result<Redirect, Html<String>> {
         if data.name.len() > MAX_POSTNAME_LENGTH {
-            data.error = Some(formatcp!("name too long, max length is {MAX_POSTNAME_LENGTH}"));
+            data.error = Some(formatcp!(
+                "name too long, max length is {MAX_POSTNAME_LENGTH}"
+            ));
             return Err(data.render(&session));
         }
 
@@ -340,7 +372,10 @@ impl Post {
         }
 
         db::with(|db| {
-            if let Err(e) = db.create_post.insert((&data.name, &session.name, now(), &data.code)) {
+            if let Err(e) = db
+                .create_post
+                .insert((&data.name, &session.name, now(), &data.code))
+            {
                 if let rusqlite::Error::SqliteFailure(e, _) = e {
                     if e.code == rusqlite::ErrorCode::ConstraintViolation {
                         data.error = Some("this name is already used");
@@ -350,23 +385,22 @@ impl Post {
                     log::error!("create post error: {e}");
                     Some("internal server error")
                 });
-                return;
             }
 
-            for (author, name) in hblang::lexer::Lexer::uses(&data.code)
-                .filter_map(|v| v.split_once('/'))
-                .collect::<HashSet<_>>()
-            {
-                if db
-                    .create_import
-                    .insert((author, name, &session.name, &data.name))
-                    .log("create import query")
-                    .is_none()
-                {
-                    data.error = Some("internal server error");
-                    return;
-                };
-            }
+            //for (author, name) in hblang::lexer::Lexer::uses(&data.code)
+            //    .filter_map(|v| v.split_once('/'))
+            //    .collect::<HashSet<_>>()
+            //{
+            //    if db
+            //        .create_import
+            //        .insert((author, name, &session.name, &data.name))
+            //        .log("create import query")
+            //        .is_none()
+            //    {
+            //        data.error = Some("internal server error");
+            //        return;
+            //    };
+            //}
         });
 
         if data.error.is_some() {
@@ -379,7 +413,16 @@ impl Post {
 
 impl fmt::Display for Post {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { author, name, timestamp, imports, runs, dependencies, code, .. } = self;
+        let Self {
+            author,
+            name,
+            timestamp,
+            imports,
+            runs,
+            dependencies,
+            code,
+            ..
+        } = self;
         write_html! { f <div class="preview" "data-author"=author "data-name"=name>
             <div class="info">
                 <span>
@@ -428,7 +471,10 @@ impl PasswordChange {
         axum::Form(mut change): axum::Form<PasswordChange>,
     ) -> Html<String> {
         db::with(|que| {
-            match que.authenticate.query_row((&session.name,), |r| r.get::<_, String>(1)) {
+            match que
+                .authenticate
+                .query_row((&session.name,), |r| r.get::<_, String>(1))
+            {
                 Ok(hash) if verify_password(&hash, &change.old_password).is_err() => {
                     change.error = Some("invalid credentials");
                 }
@@ -464,7 +510,11 @@ impl PasswordChange {
 
 impl Page for PasswordChange {
     fn render_to_buf(self, _: &Session, buf: &mut String) {
-        let Self { old_password, new_password, error } = self;
+        let Self {
+            old_password,
+            new_password,
+            error,
+        } = self;
         write_html! { (buf)
             <form "hx-post"="/profile/password" "hx-swap"="outerHTML">
                 if let Some(e) = error { <div class="error">e</div> }
@@ -489,7 +539,10 @@ impl Profile {
     }
 
     async fn get_other_page(session: Session, Path(name): Path<String>) -> Html<String> {
-        base(|b| Profile { other: Some(name) }.render_to_buf(&session, b), Some(&session))
+        base(
+            |b| Profile { other: Some(name) }.render_to_buf(&session, b),
+            Some(&session),
+        )
     }
 }
 
@@ -542,7 +595,11 @@ struct Login {
 
 impl PublicPage for Login {
     fn render_to_buf(self, buf: &mut String) {
-        let Self { name, password, error } = self;
+        let Self {
+            name,
+            password,
+            error,
+        } = self;
         write_html! { (buf)
             <form "hx-post"="/login" "hx-swap"="outerHTML">
                 if let Some(e) = error { <div class="error">e</div> }
@@ -562,28 +619,33 @@ impl Login {
     ) -> Result<AppendHeaders<[(&'static str, String); 2]>, Html<String>> {
         // TODO: hash password
         let mut id = [0u8; 32];
-        db::with(|db| match db.authenticate.query_row((&data.name,), |r| r.get::<_, String>(1)) {
-            Ok(hash) => {
-                if verify_password(&hash, &data.password).is_err() {
-                    data.error = Some("invalid credentials");
-                } else {
-                    getrandom::getrandom(&mut id).unwrap();
-                    if db
-                        .login
-                        .insert((id, &data.name, now() + SESSION_DURATION_SECS))
-                        .log("create session query")
-                        .is_none()
-                    {
-                        data.error = Some("internal server error");
+        db::with(|db| {
+            match db
+                .authenticate
+                .query_row((&data.name,), |r| r.get::<_, String>(1))
+            {
+                Ok(hash) => {
+                    if verify_password(&hash, &data.password).is_err() {
+                        data.error = Some("invalid credentials");
+                    } else {
+                        getrandom::getrandom(&mut id).unwrap();
+                        if db
+                            .login
+                            .insert((id, &data.name, now() + SESSION_DURATION_SECS))
+                            .log("create session query")
+                            .is_none()
+                        {
+                            data.error = Some("internal server error");
+                        }
                     }
                 }
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                data.error = Some("invalid credentials");
-            }
-            Err(e) => {
-                log::error!("login queri failed: {e}");
-                data.error = Some("internal server error");
+                Err(rusqlite::Error::QueryReturnedNoRows) => {
+                    data.error = Some("invalid credentials");
+                }
+                Err(e) => {
+                    log::error!("login queri failed: {e}");
+                    data.error = Some("internal server error");
+                }
             }
         });
 
@@ -622,8 +684,18 @@ struct Signup {
 
 impl PublicPage for Signup {
     fn render_to_buf(self, buf: &mut String) {
-        let Signup { name, new_password, confirm_password, confirm_no_password, error } = self;
-        let vals = if confirm_no_password { "{\"confirm_no_password\":true}" } else { "{}" };
+        let Signup {
+            name,
+            new_password,
+            confirm_password,
+            confirm_no_password,
+            error,
+        } = self;
+        let vals = if confirm_no_password {
+            "{\"confirm_no_password\":true}"
+        } else {
+            "{}"
+        };
         write_html! { (buf)
             <form "hx-post"="/signup" "hx-swap"="outerHTML" "hx-vals"=vals>
                 if let Some(e) = error { <div class="error">e</div> }
@@ -654,7 +726,10 @@ impl Signup {
 
         db::with(|db| {
             // TODO: hash passwords
-            match db.register.insert((&data.name, hash_password(&data.new_password))) {
+            match db
+                .register
+                .insert((&data.name, hash_password(&data.new_password)))
+            {
                 Ok(_) => {}
                 Err(rusqlite::Error::SqliteFailure(e, _))
                     if e.code == rusqlite::ErrorCode::ConstraintViolation =>
@@ -822,7 +897,11 @@ fn to_hex(src: &[u8]) -> String {
 }
 
 fn main() {
-    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(amain());
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(amain());
 }
 
 mod db {
@@ -913,8 +992,8 @@ mod db {
                             AND import.from_author = roots.author
                 ) SELECT * FROM roots;
             ",
-            create_import: "INSERT INTO import(to_author, to_name, from_author, from_name)
-                VALUES(?, ?, ?, ?)",
+            //create_import: "INSERT INTO import(to_author, to_name, from_author, from_name)
+            //   VALUES(?, ?, ?, ?)",
             creata_run: "INSERT OR IGNORE INTO run(code_name, code_author, runner) VALUES(?, ?, ?)",
         }
     }
@@ -948,14 +1027,16 @@ mod db {
         let db = rusqlite::Connection::open("db.sqlite").unwrap();
         db.execute_batch(include_str!("schema.sql")).unwrap();
 
-        let schema_version =
-            db.pragma_query_value(None, "user_version", |v| v.get::<_, usize>(0)).unwrap();
+        let schema_version = db
+            .pragma_query_value(None, "user_version", |v| v.get::<_, usize>(0))
+            .unwrap();
 
         if schema_version != SCHEMA_VERSION {
             for &mig in &MIGRATIONS[schema_version..] {
                 db.execute_batch(mig).expect(mig);
             }
-            db.pragma_update(None, "user_version", SCHEMA_VERSION).unwrap();
+            db.pragma_update(None, "user_version", SCHEMA_VERSION)
+                .unwrap();
         }
 
         Queries::new(&db);
@@ -999,9 +1080,10 @@ trait Page: Default {
 
     async fn page(session: Option<Session>) -> Result<Html<String>, axum::response::Redirect> {
         match session {
-            Some(session) => {
-                Ok(base(|f| Self::default().render_to_buf(&session, f), Some(&session)))
-            }
+            Some(session) => Ok(base(
+                |f| Self::default().render_to_buf(&session, f),
+                Some(&session),
+            )),
             None => Err(axum::response::Redirect::permanent("/login")),
         }
     }
@@ -1032,7 +1114,11 @@ impl log::Log for Logger {
 
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
-            eprintln!("{} - {}", record.module_path().unwrap_or("=="), record.args());
+            eprintln!(
+                "{} - {}",
+                record.module_path().unwrap_or("=="),
+                record.args()
+            );
         }
     }
 

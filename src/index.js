@@ -33,7 +33,7 @@ function compileCode(instance, packages, fuel = 100) {
 	const codeLength = packPosts(packages, new DataView(memory.buffer, INPUT.value));
 	new DataView(memory.buffer).setUint32(INPUT_LEN.value, codeLength, true);
 
-	runWasmFunction(instance, compile_and_run, fuel);
+	runWasmFunction(instance, compile_and_run, fuel, packages.length);
 	return bufToString(memory, LOG_MESSAGES, LOG_MESSAGES_LEN).trim();
 }
 
@@ -88,12 +88,12 @@ function modifyCode(instance, code, action) {
 /** @param {WebAssembly.Instance} instance @param {CallableFunction} func @param {any[]} args
  * @returns {boolean} */
 function runWasmFunction(instance, func, ...args) {
-	const { PANIC_MESSAGE, PANIC_MESSAGE_LEN, memory, stack_pointer } = instance.exports;
+	const { PANIC_MESSAGE, PANIC_MESSAGE_LEN, memory, __stack_pointer } = instance.exports;
 	if (!(true
 		&& memory instanceof WebAssembly.Memory
-		&& stack_pointer instanceof WebAssembly.Global
+		&& __stack_pointer instanceof WebAssembly.Global
 	)) never();
-	const ptr = stack_pointer.value;
+	const ptr = __stack_pointer.value;
 	try {
 		func(...args);
 		return true;
@@ -106,7 +106,7 @@ function runWasmFunction(instance, func, ...args) {
 		} else {
 			console.error(error);
 		}
-		stack_pointer.value = ptr;
+		__stack_pointer.value = ptr;
 		return false;
 	}
 }
@@ -123,6 +123,7 @@ function packPosts(posts, view) {
 		buf.set(enc.encode(post.path), len); len += post.path.length;
 		view.setUint16(len, post.code.length, true); len += 2;
 		buf.set(enc.encode(post.code), len); len += post.code.length;
+		buf[len] = 0; len += 1; // null teminate the code
 	}
 	return len;
 }

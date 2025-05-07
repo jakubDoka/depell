@@ -1,116 +1,159 @@
 const std = @import("std");
 
-// Although this function looks imperative, note that its job is to
-// declaratively construct a build graph that will be executed by an external
-// runner.
-pub fn build(b: *std.Build) void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
-    const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
-    const optimize = b.standardOptimizeOption(.{});
-
-    // This creates a "module", which represents a collection of source files alongside
-    // some compilation options, such as optimization mode and linked system libraries.
-    // Every executable or library we compile will be based on one or more modules.
-    const lib_mod = b.createModule(.{
-        // `root_source_file` is the Zig "entry point" of the module. If a module
-        // only contains e.g. external object files, you can make this `null`.
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // We will also create a module for our other entry point, 'main.zig'.
-    const exe_mod = b.createModule(.{
-        // `root_source_file` is the Zig "entry point" of the module. If a module
-        // only contains e.g. external object files, you can make this `null`.
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Modules can depend on one another using the `std.Build.Module.addImport` function.
-    // This is what allows Zig source code to use `@import("foo")` where 'foo' is not a
-    // file path. In this case, we set up `exe_mod` to import `lib_mod`.
-    exe_mod.addImport("depell_lib", lib_mod);
-
-    // Now, we will create a static library based on the module we created above.
-    // This creates a `std.Build.Step.Compile`, which is the build step responsible
-    // for actually invoking the compiler.
-    const lib = b.addLibrary(.{
-        .linkage = .static,
-        .name = "depell",
-        .root_module = lib_mod,
-    });
-
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
-
-    // This creates another `std.Build.Step.Compile`, but this one builds an executable
-    // rather than a static library.
+pub fn buildWasm(
+    b: *std.Build,
+    hb: *std.Build.Module,
+    comptime name: []const u8,
+    exports: []const []const u8,
+) *std.Build.Step.InstallFile {
     const exe = b.addExecutable(.{
-        .name = "depell",
-        .root_module = exe_mod,
+        .name = name,
+        .root_source_file = b.path("src/" ++ name ++ ".zig"),
+        .target = hb.resolved_target,
+        .optimize = hb.optimize.?,
     });
 
-    // This declares intent for the executable to be installed into the
-    // standard location when the user invokes the "install" step (the default
-    // step when running `zig build`).
-    b.installArtifact(exe);
+    exe.root_module.addImport("hb", hb);
 
-    // This *creates* a Run step in the build graph, to be executed when another
-    // step is evaluated that depends on it. The next line below will establish
-    // such a dependency.
-    const run_cmd = b.addRunArtifact(exe);
+    exe.root_module.export_symbol_names = exports;
+    exe.entry = .disabled;
 
-    // By making the run step depend on the install step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
-    // This is not necessary, however, if the application depends on other installed
-    // files, this ensures they will be present and in the expected location.
-    run_cmd.step.dependOn(b.getInstallStep());
+    var out = exe.getEmittedBin();
 
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+    if (hb.optimize == .ReleaseSmall) {
+        const wasm_opt = b.addSystemCommand(&.{ "wasm-opt", "-Oz" });
+        wasm_opt.addFileArg(out);
+        wasm_opt.addArg("-o");
+        out = wasm_opt.addOutputFileArg(name ++ ".wasm");
     }
 
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build run`
-    // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+    const gzip = b.addSystemCommand(&.{"gzip"});
+    gzip.addArg("-c");
+    gzip.addFileArg(out);
+    out = gzip.captureStdOut();
 
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    const lib_unit_tests = b.addTest(.{
-        .root_module = lib_mod,
-    });
+    return b.addInstallBinFile(out, name ++ ".wasm.gz");
+}
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+pub fn build(b: *std.Build) !void {
+    // const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
 
-    const exe_unit_tests = b.addTest(.{
-        .root_module = exe_mod,
-    });
+    const run = b.step("run", "run the depell server");
 
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    const build_depell = b.addSystemCommand(&.{ "cargo", "build" });
 
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
-    test_step.dependOn(&run_exe_unit_tests.step);
+    build_depell: {
+        var out_bin: []const u8 = "target/debug/depell";
+        if (optimize == .ReleaseFast) {
+            build_depell.addArgs(&.{
+                "--release",
+                "--features",
+                "tls",
+                "--target",
+                "x86_64-unknown-linux-musl",
+            });
+            out_bin = "target/x86_64-unknown-linux-musl/release/depell";
+        }
+
+        const out = b.addInstallBinFile(b.path(out_bin), "depell");
+        out.step.dependOn(&build_depell.step);
+        b.getInstallStep().dependOn(&out.step);
+
+        run.dependOn(&out.step);
+        run.dependOn(&b.addSystemCommand(&.{out_bin}).step);
+
+        break :build_depell;
+    }
+
+    compress_assets: {
+        const assets: []const []const u8 = &.{ "index.css", "index.js" };
+
+        inline for (assets) |ass| {
+            const gzip = b.addSystemCommand(&.{"gzip"});
+            gzip.addArg("-c");
+            gzip.addFileArg(b.path("src/" ++ ass));
+            const out = gzip.captureStdOut();
+            build_depell.step.dependOn(&b.addInstallFile(out, "static/" ++ ass ++ ".gz").step);
+        }
+
+        break :compress_assets;
+    }
+
+    build_wasm: {
+        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+        const hblang = b.dependency("hblang", .{
+            .target = wasm_target,
+            .optimize = if (optimize == .ReleaseFast) .ReleaseSmall else optimize,
+        });
+
+        const hb = hblang.module("hb");
+
+        build_depell.step.dependOn(&buildWasm(b, hb, "hbc", &.{
+            "MAX_INPUT",
+            "INPUT",
+            "INPUT_LEN",
+
+            "LOG_MESSAGES",
+            "LOG_MESSAGES_LEN",
+
+            "compile_and_run",
+            "__stack_pointer",
+        }).step);
+
+        build_depell.step.dependOn(&buildWasm(b, hb, "hbfmt", &.{
+            "MAX_INPUT",
+            "INPUT",
+            "INPUT_LEN",
+
+            "MAX_OUTPUT",
+            "OUTPUT",
+            "OUTPUT_LEN",
+
+            "fmt",
+            "tok",
+            "minify",
+            "__stack_pointer",
+        }).step);
+
+        break :build_wasm;
+    }
+
+    render_markdown: {
+        const mumd_render = b.addExecutable(.{
+            .name = "mumd_render",
+            .optimize = .Debug,
+            .target = b.graph.host,
+        });
+        mumd_render.root_module.addIncludePath(b.path("vendored/mumd"));
+        mumd_render.root_module.addCSourceFile(.{ .file = b.path("vendored/mumd/example.c") });
+        mumd_render.linkLibC();
+
+        const dir = try std.fs.cwd().openDir("src/static-pages/", .{ .iterate = true });
+        var iter = dir.iterate();
+
+        while (try iter.next()) |f| {
+            std.debug.assert(f.kind == .file);
+            std.debug.assert(std.mem.endsWith(u8, f.name, ".md"));
+
+            const translate = b.addRunArtifact(mumd_render);
+            translate.addFileArg(b.path(try std.fs.path.join(b.allocator, &.{ "src/static-pages/", f.name })));
+            var out = translate.captureStdOut();
+            var ext: []const u8 = ".html";
+
+            if (false and optimize == .ReleaseFast) {
+                const gzip = b.addSystemCommand(&.{"gzip"});
+                gzip.addArg("-c");
+                gzip.addFileArg(out);
+                out = gzip.captureStdOut();
+                ext = ".html.gz";
+            }
+
+            const name = try std.mem.replaceOwned(u8, b.allocator, f.name, ".md", ext);
+            const sub_path = try std.fs.path.join(b.allocator, &.{ "static", name });
+            build_depell.step.dependOn(&b.addInstallFile(out, sub_path).step);
+        }
+
+        break :render_markdown;
+    }
 }
