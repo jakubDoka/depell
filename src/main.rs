@@ -13,7 +13,7 @@ use {
     rand_core::OsRng,
     serde::{Deserialize, Serialize},
     std::{
-        collections::HashMap,
+        collections::{HashMap, HashSet},
         fmt::{Display, Write},
         net::Ipv4Addr,
     },
@@ -387,20 +387,26 @@ impl Post {
                 });
             }
 
-            //for (author, name) in hblang::lexer::Lexer::uses(&data.code)
-            //    .filter_map(|v| v.split_once('/'))
-            //    .collect::<HashSet<_>>()
-            //{
-            //    if db
-            //        .create_import
-            //        .insert((author, name, &session.name, &data.name))
-            //        .log("create import query")
-            //        .is_none()
-            //    {
-            //        data.error = Some("internal server error");
-            //        return;
-            //    };
-            //}
+            for (author, name) in data
+                .code
+                .match_indices("@use(\"")
+                .filter_map(|(idx, pat)| {
+                    data.code[idx + pat.len()..][..(data.code.len() - (idx + pat.len())).min(512)]
+                        .split_once('"')
+                        .and_then(|(v, _)| v.split_once('/'))
+                })
+                .collect::<HashSet<_>>()
+            {
+                if db
+                    .create_import
+                    .insert((author, name, &session.name, &data.name))
+                    .log("create import query")
+                    .is_none()
+                {
+                    data.error = Some("internal server error");
+                    return;
+                };
+            }
         });
 
         if data.error.is_some() {
@@ -617,7 +623,6 @@ impl Login {
     async fn post(
         axum::Form(mut data): axum::Form<Self>,
     ) -> Result<AppendHeaders<[(&'static str, String); 2]>, Html<String>> {
-        // TODO: hash password
         let mut id = [0u8; 32];
         db::with(|db| {
             match db
@@ -725,7 +730,6 @@ impl Signup {
         }
 
         db::with(|db| {
-            // TODO: hash passwords
             match db
                 .register
                 .insert((&data.name, hash_password(&data.new_password)))
@@ -992,8 +996,8 @@ mod db {
                             AND import.from_author = roots.author
                 ) SELECT * FROM roots;
             ",
-            //create_import: "INSERT INTO import(to_author, to_name, from_author, from_name)
-            //   VALUES(?, ?, ?, ?)",
+            create_import: "INSERT INTO import(to_author, to_name, from_author, from_name)
+               VALUES(?, ?, ?, ?)",
             creata_run: "INSERT OR IGNORE INTO run(code_name, code_author, runner) VALUES(?, ?, ?)",
         }
     }
