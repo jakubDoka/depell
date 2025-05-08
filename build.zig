@@ -21,7 +21,7 @@ pub fn buildWasm(
     var out = exe.getEmittedBin();
 
     if (hb.optimize == .ReleaseSmall) {
-        const wasm_opt = b.addSystemCommand(&.{ "wasm-opt", "-Oz" });
+        const wasm_opt = b.addSystemCommand(&.{ "wasm-opt", "-Oz", "--enable-bulk-memory", "--enable-nontrapping-float-to-int" });
         wasm_opt.addFileArg(out);
         wasm_opt.addArg("-o");
         out = wasm_opt.addOutputFileArg(name ++ ".wasm");

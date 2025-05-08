@@ -1,5 +1,6 @@
 /target
 /.zig-cache
 /zig-out
+/db.sqlite
 **/*.gz
 /src/static-pages/*.html

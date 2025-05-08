@@ -73,6 +73,7 @@ function modifyCode(instance, code, action) {
 	let dw = new DataView(memory.buffer);
 	dw.setUint32(INPUT_LEN.value, code.length, true);
 	new Uint8Array(memory.buffer, INPUT.value).set(new TextEncoder().encode(code));
+	new Uint8Array(memory.buffer, INPUT.value + code.length)[0] = 0;
 
 	if (!runWasmFunction(instance, fun)) {
 		return undefined;
