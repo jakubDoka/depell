@@ -98,8 +98,8 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
     var codegen = hb.frontend.Codegen.init(arena.allocator(), hb.utils.Arena.scrath(null).arena, &types, .runtime);
     var backend = backend: {
         const slot = arena.create(hb.hbvm.HbvmGen);
-        slot.* = hb.hbvm.HbvmGen{ .gpa = arena.allocator(), .emit_header = true };
-        break :backend hb.backend.Mach.init(slot);
+        slot.* = hb.hbvm.HbvmGen{ .gpa = arena.allocator() };
+        break :backend slot;
     };
 
     const entry = codegen.getEntry(.root, "main") catch {
@@ -114,6 +114,8 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
     };
 
     codegen.queue(.{ .Func = entry });
+
+    var out = hb.backend.Machine.Data{};
 
     var errored = false;
     while (codegen.nextTask()) |tsk| switch (tsk) {
@@ -130,7 +132,7 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
 
             var errors = std.ArrayListUnmanaged(hb.backend.static_anal.Error){};
 
-            backend.emitFunc(&codegen.bl.func, .{
+            backend.emitFunc(@ptrCast(&codegen.bl.func), .{
                 .id = @intFromEnum(func),
                 .name = try hb.frontend.Types.Id.init(.{ .Func = func })
                     .fmt(&types).toString(arena.allocator()),
@@ -139,6 +141,7 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
                     .arena = tmp.arena,
                     .error_buf = &errors,
                 },
+                .out = &out,
             });
 
             errored = types.dumpAnalErrors(&errors) or errored;
@@ -149,6 +152,7 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
                 .name = try hb.frontend.Types.Id.init(.{ .Global = global })
                     .fmt(&types).toString(arena.allocator()),
                 .value = .{ .init = types.store.get(global).data },
+                .out = &out,
             });
         },
     };
@@ -163,12 +167,19 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
         return;
     }
 
-    const code = backend.finalize().items;
-    const head: hb.hbvm.HbvmGen.ExecHeader = @bitCast(code[0..@sizeOf(hb.hbvm.HbvmGen.ExecHeader)].*);
+    const ExecHeader = hb.hbvm.isa.ExecHeader;
 
-    const stack_end = stack_size - code.len + @sizeOf(hb.hbvm.HbvmGen.ExecHeader);
+    _ = backend.finalize();
 
-    @memcpy(stack[stack_end..], code[@sizeOf(hb.hbvm.HbvmGen.ExecHeader)..]);
+    var code_buf = std.ArrayListUnmanaged(u8){};
+    try hb.Object.Ableos.flush(out, .x86_64, code_buf.writer(arena.allocator()).any());
+    const code = code_buf.items;
+
+    const head: ExecHeader = @bitCast(code[0..@sizeOf(ExecHeader)].*);
+
+    const stack_end = stack_size - code.len + @sizeOf(ExecHeader);
+
+    @memcpy(stack[stack_end..], code[@sizeOf(ExecHeader)..]);
 
     var vm = hb.hbvm.Vm{};
     vm.ip = stack_end;
