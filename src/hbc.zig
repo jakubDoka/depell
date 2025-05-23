@@ -115,8 +115,6 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
 
     codegen.queue(.{ .Func = entry });
 
-    var out = hb.backend.Machine.Data{};
-
     var errored = false;
     while (codegen.nextTask()) |tsk| switch (tsk) {
         .Func => |func| {
@@ -141,7 +139,6 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
                     .arena = tmp.arena,
                     .error_buf = &errors,
                 },
-                .out = &out,
             });
 
             errored = types.dumpAnalErrors(&errors) or errored;
@@ -152,7 +149,6 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
                 .name = try hb.frontend.Types.Id.init(.{ .Global = global })
                     .fmt(&types).toString(arena.allocator()),
                 .value = .{ .init = types.store.get(global).data },
-                .out = &out,
             });
         },
     };
@@ -167,12 +163,10 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
         return;
     }
 
-    const ExecHeader = hb.hbvm.isa.ExecHeader;
-
-    _ = backend.finalize();
+    const ExecHeader = hb.hbvm.object.ExecHeader;
 
     var code_buf = std.ArrayListUnmanaged(u8){};
-    try hb.Object.Ableos.flush(out, .x86_64, code_buf.writer(arena.allocator()).any());
+    backend.finalize(code_buf.writer(arena.allocator()).any());
     const code = code_buf.items;
 
     const head: ExecHeader = @bitCast(code[0..@sizeOf(ExecHeader)].*);
