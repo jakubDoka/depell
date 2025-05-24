@@ -60,8 +60,9 @@ pub fn build(b: *std.Build) !void {
         out.step.dependOn(&build_depell.step);
         b.getInstallStep().dependOn(&out.step);
 
-        run.dependOn(&out.step);
-        run.dependOn(&b.addSystemCommand(&.{out_bin}).step);
+        const runner = b.addSystemCommand(&.{out_bin});
+        runner.step.dependOn(b.getInstallStep());
+        run.dependOn(&runner.step);
 
         break :build_depell;
     }

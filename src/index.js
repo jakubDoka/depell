@@ -151,8 +151,25 @@ function bufToString(mem, ptr, len) {
 }
 
 /** @param {HTMLElement} target */
+function doHighlighting(target) {
+	for (const pre of target.querySelectorAll("pre.lang-hb")) {
+		if (!(pre instanceof HTMLElement)) continue;
+		fmt(pre);
+
+		getHbcInstance().then(i => {
+			const result = compileCode(i, [{
+				path: "example",
+				code: pre.textContent ?? never(),
+			}])
+			pre.innerHTML += result;
+		});
+	}
+}
+
+/** @param {HTMLElement} target */
 function wireUp(target) {
 	execApply(target);
+	doHighlighting(target);
 	cacheInputs(target);
 	bindCodeEdit(target);
 	bindTextareaAutoResize(target);
@@ -475,8 +492,9 @@ if (window.location.hostname === 'localhost') {
 document.body.addEventListener('htmx:afterSwap', (ev) => {
 	if (!(ev.target instanceof HTMLElement)) never();
 	wireUp(ev.target);
-	if (ev.target.tagName == "MAIN" || ev.target.tagName == "BODY")
+	if (ev.target.tagName == "MAIN" || ev.target.tagName == "BODY") {
 		updateTab(ev['detail'].pathInfo.finalRequestPath);
+	}
 });
 
 getFmtInstance().then(inst => {

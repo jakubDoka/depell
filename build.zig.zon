@@ -37,8 +37,8 @@
     // internet connectivity.
     .dependencies = .{
         .hblang = .{
-            .url = "git+https://github.com/jakubDoka/hblang#18154fc6dab3fd7f4e1c880eacda0828f740e91f",
-            .hash = "hblang-0.0.0-8N3wZ9UOCACN2IJVdwI27SHrnYWT8uzivw64SxMMf0TO",
+            .url = "git+https://github.com/jakubDoka/hblang#f6475caaf7ee6cb307a033ac07156ff8f126447f",
+            .hash = "hblang-0.0.0-8N3wZ9UOCACY1xkj-6KxUgJVLjt1zNpjm29vTMBcxpA9",
         },
     },
     .paths = .{

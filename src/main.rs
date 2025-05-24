@@ -77,6 +77,8 @@ async fn amain() {
         .route("/blogs/index-view", get(Index::get))
         .route("/blogs/developing-hblang", get(DevelopingHblang::page))
         .route("/blogs/developing-hblang-view", get(DevelopingHblang::get))
+        .route("/blogs/hblang-report-1", get(HblangReport1::page))
+        .route("/blogs/hblang-report-1-view", get(HblangReport1::get))
         .route("/feed", get(Feed::page))
         .route("/feed-view", get(Feed::get))
         .route("/feed-more", post(Feed::more))
@@ -262,6 +264,9 @@ decl_static_pages! {
     #[derive(PublicPage)]
     #[page(static = "developing-hblang")]
     struct DevelopingHblang;
+    #[derive(PublicPage)]
+    #[page(static = "hblang-report-1")]
+    struct HblangReport1;
 }
 
 impl Index {
@@ -633,7 +638,7 @@ impl Login {
                     if verify_password(&hash, &data.password).is_err() {
                         data.error = Some("invalid credentials");
                     } else {
-                        getrandom::getrandom(&mut id).unwrap();
+                        getrandom::fill(&mut id).unwrap();
                         if db
                             .login
                             .insert((id, &data.name, now() + SESSION_DURATION_SECS))
