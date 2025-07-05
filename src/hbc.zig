@@ -93,66 +93,23 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
         });
     }
 
-    var types = hb.frontend.Types.init(arena.allocator(), asts, diagnostics);
+    const types = hb.frontend.Types.init(arena, asts, diagnostics);
 
-    var codegen = hb.frontend.Codegen.init(arena.allocator(), hb.utils.Arena.scrath(null).arena, &types, .runtime);
     var backend = backend: {
-        const slot = arena.create(hb.hbvm.HbvmGen);
-        slot.* = hb.hbvm.HbvmGen{ .gpa = arena.allocator() };
-        break :backend slot;
+        const slot = types.pool.arena.create(hb.hbvm.HbvmGen);
+        slot.* = hb.hbvm.HbvmGen{ .gpa = types.pool.allocator() };
+        break :backend hb.backend.Machine.init("hbvm-ableos", slot);
     };
 
-    const entry = codegen.getEntry(.root, "main") catch {
-        try diagnostics.writeAll(
-            \\...you can define the `main` in the mentioned file:
-            \\main := fn(): uint {
-            \\    return 0
-            \\}
-        );
-
-        return error.Failed;
-    };
-
-    codegen.queue(.{ .Func = entry });
-
-    var errored = false;
-    while (codegen.nextTask()) |tsk| switch (tsk) {
-        .Func => |func| {
-            defer codegen.bl.func.reset();
-
-            codegen.build(func) catch {
-                errored = true;
-                continue;
-            };
-
-            var tmp = hb.utils.Arena.scrath(null);
-            defer tmp.deinit();
-
-            var errors = std.ArrayListUnmanaged(hb.backend.static_anal.Error){};
-
-            backend.emitFunc(@ptrCast(&codegen.bl.func), .{
-                .id = @intFromEnum(func),
-                .name = try hb.frontend.Types.Id.init(.{ .Func = func })
-                    .fmt(&types).toString(arena.allocator()),
-                .entry = func == entry,
-                .optimizations = .{
-                    .arena = tmp.arena,
-                    .error_buf = &errors,
-                },
-            });
-
-            errored = types.dumpAnalErrors(&errors) or errored;
-        },
-        .Global => |global| {
-            backend.emitData(.{
-                .id = @intFromEnum(global),
-                .name = try hb.frontend.Types.Id.init(.{ .Global = global })
-                    .fmt(&types).toString(arena.allocator()),
-                .value = .{ .init = types.store.get(global).data },
-            });
-        },
-    };
-
+    const errored = hb.frontend.Codegen.emitReachable(
+        hb.utils.Arena.scrath(null).arena,
+        types,
+        .ableos,
+        backend,
+        .all,
+        true,
+        .{},
+    );
     if (errored) {
         try diagnostics.print("failed due to previous errors\n", .{});
         return;
@@ -165,14 +122,10 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
 
     const ExecHeader = hb.hbvm.object.ExecHeader;
 
-    var code_buf = std.ArrayListUnmanaged(u8){};
-    backend.finalize(code_buf.writer(arena.allocator()).any());
-    const code = code_buf.items;
+    const code = backend.finalizeBytes(.{ .gpa = types.pool.allocator(), .builtins = .{} }).items;
 
     const head: ExecHeader = @bitCast(code[0..@sizeOf(ExecHeader)].*);
-
     const stack_end = stack_size - code.len + @sizeOf(ExecHeader);
-
     @memcpy(stack[stack_end..], code[@sizeOf(ExecHeader)..]);
 
     var vm = hb.hbvm.Vm{};

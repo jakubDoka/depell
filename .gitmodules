@@ -1,3 +1,6 @@
 [submodule "vendored/mumd"]
 	path = vendored/mumd
 	url = https://github.com/Ducklett/mumd.git
+[submodule "vendored/hblang"]
+	path = vendored/hblang
+	url = https://git.ablecorp.eu/mlokis/hblang.git
