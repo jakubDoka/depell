@@ -5,7 +5,7 @@
     .minimum_zig_version = "0.14.0",
     .dependencies = .{
         .hblang = .{
-            .path = "vendored/hblang/",
+            .path = "../../zig/hblang/", //"vendored/hblang/",
         },
     },
     .paths = .{

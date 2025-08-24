@@ -35,12 +35,9 @@ pub export fn fmt() void {
         .mode = .legacy,
     });
 
-    var allc = std.heap.FixedBufferAllocator.init(&OUTPUT);
-    var buf = try std.ArrayList(u8).initCapacity(allc.allocator(), max_input_size);
-
+    var buf = std.Io.Writer.fixed(&OUTPUT);
     try ast.fmt(&buf);
-
-    OUTPUT_LEN = buf.items.len;
+    OUTPUT_LEN = buf.end;
 }
 
 pub export fn tok() void {

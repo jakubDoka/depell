@@ -5,6 +5,25 @@ pub export var INPUT_LEN: usize = 0;
 const max_log_size: usize = 10 * 1024;
 pub export var LOG_MESSAGES: [max_log_size]u8 = undefined;
 pub export var LOG_MESSAGES_LEN: usize = 0;
+const max_panic_size: usize = 1024;
+pub export var PANIC_MESSAGE: [max_panic_size]u8 = undefined;
+pub export var PANIC_MESSAGE_LEN: usize = 0;
+
+pub fn panic(message: []const u8, stack_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    _ = stack_trace;
+    _ = ret_addr;
+
+    @memcpy(
+        PANIC_MESSAGE[0..@min(message.len, max_panic_size)],
+        message[0..@min(message.len, max_panic_size)],
+    );
+    PANIC_MESSAGE_LEN = message.len;
+
+    PANIC_MESSAGE[PANIC_MESSAGE_LEN] = '\n';
+    PANIC_MESSAGE_LEN += 1;
+
+    @trap();
+}
 
 const std = @import("std");
 const hb = @import("hb");
@@ -19,7 +38,7 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
     errdefer unreachable;
 
     if (!inited) {
-        arena = .init(1024 * 1024 * 2);
+        arena = .init(1024 * 1024 * 16);
         hb.utils.Arena.initScratch(1024 * 128);
         inited = true;
     } else {
@@ -67,24 +86,15 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
         }
     };
 
-    var logs: []u8 = &LOG_MESSAGES;
-    const LogWriter = std.io.GenericWriter(*[]u8, error{OutOfMemory}, struct {
-        fn wfn(ctx: *[]u8, data: []const u8) error{OutOfMemory}!usize {
-            if (ctx.len < data.len) return error.OutOfMemory;
-            @memcpy(ctx.*[0..data.len], data);
-            ctx.* = ctx.*[data.len..];
-            LOG_MESSAGES_LEN += data.len;
-            return data.len;
-        }
-    }.wfn);
-    const diagnostics = (LogWriter{ .context = &logs }).any();
+    var diagnostics = std.Io.Writer.fixed(&LOG_MESSAGES);
+    defer LOG_MESSAGES_LEN = diagnostics.end;
 
     const asts = arena.alloc(hb.frontend.Ast, file_count);
     var known_loader = KnownLoader{ .files = files };
 
     for (asts, files, 0..) |*ast, fl, i| {
         ast.* = try hb.frontend.Ast.init(&arena, .{
-            .diagnostics = diagnostics,
+            .diagnostics = &diagnostics,
             .path = fl.path,
             .code = fl.source,
             .current = @enumFromInt(i),
@@ -93,36 +103,36 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
         });
     }
 
-    const types = hb.frontend.Types.init(arena, asts, diagnostics);
+    const types = hb.frontend.Types.init(arena, asts, &diagnostics);
 
     var backend = backend: {
         const slot = types.pool.arena.create(hb.hbvm.HbvmGen);
-        slot.* = hb.hbvm.HbvmGen{ .gpa = types.pool.allocator() };
-        break :backend hb.backend.Machine.init("hbvm-ableos", slot);
+        slot.* = hb.hbvm.HbvmGen{ .gpa = &types.pool };
+        break :backend hb.backend.Machine.init(slot);
     };
 
+    var threading = hb.Threading{ .single = .{ .types = types, .machine = backend } };
     const errored = hb.frontend.Codegen.emitReachable(
         hb.utils.Arena.scrath(null).arena,
-        types,
-        .ableos,
-        backend,
-        .all,
-        true,
-        .{},
+        &threading,
+        .{
+            .has_main = true,
+            .abi = .ableos,
+            .optimizations = .release,
+        },
     );
     if (errored) {
         try diagnostics.print("failed due to previous errors\n", .{});
         return;
     }
 
-    if (false) {
-        backend.disasm(diagnostics, .no_color);
-        return;
-    }
-
     const ExecHeader = hb.hbvm.object.ExecHeader;
 
-    const code = backend.finalizeBytes(.{ .gpa = types.pool.allocator(), .builtins = .{} }).items;
+    const code = backend.finalizeBytes(.{
+        .gpa = types.pool.allocator(),
+        .builtins = .{},
+        .optimizations = .{ .mode = .release },
+    }).items;
 
     const head: ExecHeader = @bitCast(code[0..@sizeOf(ExecHeader)].*);
     const stack_end = stack_size - code.len + @sizeOf(ExecHeader);
@@ -149,6 +159,10 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
                 0 => {
                     const str: [*:0]u8 = @ptrCast(&ctx.memory[@intCast(vm.regs.get(.arg(1)))]);
                     try diagnostics.writeAll(str[0..std.mem.len(str)]);
+                },
+                1 => {
+                    const str: []const u8 = ctx.memory[@intCast(vm.regs.get(.arg(1)))..][0..@intCast(vm.regs.get(.arg(2)))];
+                    try diagnostics.writeAll(str);
                 },
                 else => unreachable,
             }

@@ -5,18 +5,23 @@ pub fn buildWasm(
     hb: *std.Build.Module,
     comptime name: []const u8,
     exports: []const []const u8,
+    check_step: *std.Build.Step,
 ) *std.Build.Step.InstallFile {
     const exe = b.addExecutable(.{
         .name = name,
-        .root_source_file = b.path("src/" ++ name ++ ".zig"),
-        .target = hb.resolved_target,
-        .optimize = hb.optimize.?,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/" ++ name ++ ".zig"),
+            .target = hb.resolved_target,
+            .optimize = hb.optimize.?,
+        }),
     });
 
     exe.root_module.addImport("hb", hb);
 
     exe.root_module.export_symbol_names = exports;
     exe.entry = .disabled;
+
+    check_step.dependOn(&exe.step);
 
     var out = exe.getEmittedBin();
 
@@ -81,6 +86,8 @@ pub fn build(b: *std.Build) !void {
         break :compress_assets;
     }
 
+    const check = b.step("check", "check for errors");
+
     build_wasm: {
         const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
         const hblang = b.dependency("hblang", .{
@@ -98,9 +105,12 @@ pub fn build(b: *std.Build) !void {
             "LOG_MESSAGES",
             "LOG_MESSAGES_LEN",
 
+            "PANIC_MESSAGE",
+            "PANIC_MESSAGE_LEN",
+
             "compile_and_run",
             "__stack_pointer",
-        }).step);
+        }, check).step);
 
         build_depell.step.dependOn(&buildWasm(b, hb, "hbfmt", &.{
             "MAX_INPUT",
@@ -115,7 +125,7 @@ pub fn build(b: *std.Build) !void {
             "tok",
             "minify",
             "__stack_pointer",
-        }).step);
+        }, check).step);
 
         break :build_wasm;
     }
@@ -123,8 +133,10 @@ pub fn build(b: *std.Build) !void {
     render_markdown: {
         const mumd_render = b.addExecutable(.{
             .name = "mumd_render",
-            .optimize = .Debug,
-            .target = b.graph.host,
+            .root_module = b.createModule(.{
+                .optimize = .Debug,
+                .target = b.graph.host,
+            }),
         });
         mumd_render.root_module.addIncludePath(b.path("vendored/mumd"));
         mumd_render.root_module.addCSourceFile(.{ .file = b.path("vendored/mumd/example.c") });
