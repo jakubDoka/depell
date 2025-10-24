@@ -79,6 +79,8 @@ async fn amain() {
         .route("/blogs/developing-hblang-view", get(DevelopingHblang::get))
         .route("/blogs/hblang-report-1", get(HblangReport1::page))
         .route("/blogs/hblang-report-1-view", get(HblangReport1::get))
+        .route("/blogs/hblang-report-2", get(HblangReport2::page))
+        .route("/blogs/hblang-report-2-view", get(HblangReport2::get))
         .route("/feed", get(Feed::page))
         .route("/feed-view", get(Feed::get))
         .route("/feed-more", post(Feed::more))
@@ -269,6 +271,9 @@ decl_static_pages! {
     #[derive(PublicPage)]
     #[page(static = "hblang-report-1")]
     struct HblangReport1;
+    #[derive(PublicPage)]
+    #[page(static = "hblang-report-2")]
+    struct HblangReport2;
 }
 
 #[derive(Default)]

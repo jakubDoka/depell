@@ -6,8 +6,8 @@ pub fn buildWasm(
     comptime name: []const u8,
     exports: []const []const u8,
     check_step: *std.Build.Step,
+    debuging: bool,
 ) *std.Build.Step.InstallFile {
-    const debuging = true;
     const exe = b.addExecutable(.{
         .name = name,
         .root_module = b.createModule(.{
@@ -47,6 +47,8 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const run = b.step("run", "run the depell server");
+
+    const debuging = b.option(bool, "debug", "debug build") orelse false;
 
     const build_depell = b.addSystemCommand(&.{ "cargo", "build" });
 
@@ -114,7 +116,7 @@ pub fn build(b: *std.Build) !void {
 
             "compile_and_run",
             "__stack_pointer",
-        }, check).step);
+        }, check, debuging).step);
 
         build_depell.step.dependOn(&buildWasm(b, hb, "hbfmt", &.{
             "MAX_INPUT",
@@ -129,7 +131,7 @@ pub fn build(b: *std.Build) !void {
             "tok",
             "minify",
             "__stack_pointer",
-        }, check).step);
+        }, check, debuging).step);
 
         break :build_wasm;
     }

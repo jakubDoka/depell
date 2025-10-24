@@ -142,12 +142,24 @@ pub export fn compile_and_run(fuel: usize, file_count: usize, to_wasm: bool) voi
 
     const ExecHeader = hb.hbvm.object.ExecHeader;
 
+    var anal_errors = std.ArrayList(hb.backend.static_anal.Error){};
+
     const code = backend.finalizeBytes(.{
         .gpa = types.pool.allocator(),
         .builtins = .{},
-        .optimizations = .{ .mode = .release },
+        .optimizations = .{
+            .mode = .release,
+            .error_buf = &anal_errors,
+            .arena = &types.pool.arena,
+        },
         .files = types.line_indexes,
     }).items;
+
+    if (types.dumpAnalErrors(&anal_errors)) {
+        try diagnostics.print("failed due to previous errors\n", .{});
+        WASM_BLOB.len = 0;
+        return;
+    }
 
     if (to_wasm) {
         WASM_BLOB = .{ .ptr = code.ptr, .len = code.len };
