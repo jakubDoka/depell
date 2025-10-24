@@ -9,6 +9,13 @@ const max_panic_size: usize = 1024;
 pub export var PANIC_MESSAGE: [max_panic_size]u8 = undefined;
 pub export var PANIC_MESSAGE_LEN: usize = 0;
 
+pub export var WASM_BLOB: WasmBlob = undefined;
+
+pub const WasmBlob = extern struct {
+    ptr: [*]u8,
+    len: usize,
+};
+
 pub fn panic(message: []const u8, stack_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
     _ = stack_trace;
     _ = ret_addr;
@@ -34,7 +41,7 @@ var inited = false;
 const stack_size = 1024 * 128;
 var stack: [stack_size]u8 = undefined;
 
-pub export fn compile_and_run(fuel: usize, file_count: usize) void {
+pub export fn compile_and_run(fuel: usize, file_count: usize, to_wasm: bool) void {
     errdefer unreachable;
 
     if (!inited) {
@@ -103,12 +110,18 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
         });
     }
 
-    const types = hb.frontend.Types.init(arena, asts, &diagnostics);
+    const types = hb.frontend.Types.init(arena, asts, &diagnostics, null);
 
     var backend = backend: {
-        const slot = types.pool.arena.create(hb.hbvm.HbvmGen);
-        slot.* = hb.hbvm.HbvmGen{ .gpa = &types.pool };
-        break :backend hb.backend.Machine.init(slot);
+        if (to_wasm) {
+            const slot = types.pool.arena.create(hb.wasm.WasmGen);
+            slot.* = hb.wasm.WasmGen{ .gpa = types.pool.allocator() };
+            break :backend &slot.mach;
+        } else {
+            const slot = types.pool.arena.create(hb.hbvm.HbvmGen);
+            slot.* = hb.hbvm.HbvmGen{ .gpa = types.pool.allocator() };
+            break :backend &slot.mach;
+        }
     };
 
     var threading = hb.Threading{ .single = .{ .types = types, .machine = backend } };
@@ -117,12 +130,13 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
         &threading,
         .{
             .has_main = true,
-            .abi = .ableos,
+            .abi = if (to_wasm) .wasm else .ableos,
             .optimizations = .release,
         },
     );
     if (errored) {
         try diagnostics.print("failed due to previous errors\n", .{});
+        WASM_BLOB.len = 0;
         return;
     }
 
@@ -132,7 +146,13 @@ pub export fn compile_and_run(fuel: usize, file_count: usize) void {
         .gpa = types.pool.allocator(),
         .builtins = .{},
         .optimizations = .{ .mode = .release },
+        .files = types.line_indexes,
     }).items;
+
+    if (to_wasm) {
+        WASM_BLOB = .{ .ptr = code.ptr, .len = code.len };
+        return;
+    }
 
     const head: ExecHeader = @bitCast(code[0..@sizeOf(ExecHeader)].*);
     const stack_end = stack_size - code.len + @sizeOf(ExecHeader);

@@ -25,7 +25,7 @@ const MAX_CODE_LENGTH: usize = 1024 * 4;
 const SESSION_DURATION_SECS: u64 = 60 * 60;
 const MAX_FEED_SIZE: usize = 8 * 1024;
 
-type Redirect<const COUNT: usize = 1> = AppendHeaders<[(&'static str, &'static str); COUNT]>;
+type Redirect<const COUNT: usize = 1> = AppendHeaders<[(&'static str, String); COUNT]>;
 
 macro_rules! static_asset {
     ($mime:literal, $body:literal) => {
@@ -236,7 +236,7 @@ macro_rules! decl_static_pages {
     ($(
         #[derive(PublicPage)]
         #[page(static = $file:literal)]
-        struct $name:ident;
+        struct $name:ident$(($($extra:ident)*))?;
     )*) => {
         const ALL_STATIC_PAGES: [&str; ${count($file)}] = [$($file),*];
 
@@ -247,6 +247,8 @@ macro_rules! decl_static_pages {
             impl PublicPage for $name {
                 fn render_to_buf(self, buf: &mut String) {
                     buf.push_str(include_str!(concat!("../zig-out/static/", $file, ".html")));
+
+                    $($($extra::default().render_to_buf(buf);)*)?
                 }
 
                 async fn page(session: Option<Session>) -> Html<String> {
@@ -260,13 +262,45 @@ macro_rules! decl_static_pages {
 decl_static_pages! {
     #[derive(PublicPage)]
     #[page(static = "welcome")]
-    struct Index;
+    struct Index(PostPreview);
     #[derive(PublicPage)]
     #[page(static = "developing-hblang")]
     struct DevelopingHblang;
     #[derive(PublicPage)]
     #[page(static = "hblang-report-1")]
     struct HblangReport1;
+}
+
+#[derive(Default)]
+pub struct PostPreview;
+
+impl PublicPage for PostPreview {
+    fn render_to_buf(self, buf: &mut String) {
+        Post {
+            name: "playground".to_string(),
+            code: r#"
+print := fn(s: []u8): void @import("log")
+
+main := fn(): uint {
+    print("Hello, Depell!\n")
+    return 42
+}
+"#
+            .to_string(),
+
+            uses_wasm: true,
+            preview_mode: true,
+
+            ..Default::default()
+        }
+        .render_to_buf(
+            &Session {
+                name: "anon".to_string(),
+                id: [0; 32],
+            },
+            buf,
+        );
+    }
 }
 
 impl Index {
@@ -281,6 +315,8 @@ impl Index {
 struct Post {
     author: String,
     name: String,
+    #[serde(default)]
+    uses_wasm: bool,
     #[serde(skip)]
     timestamp: u64,
     #[serde(skip)]
@@ -292,38 +328,71 @@ struct Post {
     code: String,
     #[serde(skip)]
     error: Option<&'static str>,
+    #[serde(skip)]
+    preview_mode: bool,
 }
 
 impl Page for Post {
     fn render_to_buf(self, session: &Session, buf: &mut String) {
         let Self {
-            name, code, error, ..
+            name,
+            code,
+            error,
+            uses_wasm,
+            preview_mode,
+            ..
         } = self;
         write_html! { (buf)
             <form id="postForm" "hx-post"="/post" "hx-swap"="outerHTML">
                 if let Some(e) = error { <div class="error">e</div> }
                 <input name="author" type="text" value={session.name} hidden>
-                <input name="name" type="text" placeholder="name" value=name
-                    required maxlength=MAX_POSTNAME_LENGTH>
+                <div class="name-and-wasm-toggle">
+                    <div class="toggle">
+                        if uses_wasm {
+                            <input type="checkbox" id="use-wasm-check" name="uses_wasm"
+                                value=true checked hidden>
+                        } else {
+                            <input type="checkbox" id="use-wasm-check" name="uses_wasm"
+                                value=true hidden>
+                        }
+                        <label for="use-wasm-check">"use wasm"</label>
+                    </div>
+                    if !preview_mode {
+                        <input name={if preview_mode {"preview-name"} else {"name"}}
+                            type="text" placeholder="name" value=name
+                            required maxlength=MAX_POSTNAME_LENGTH>
+                    } else {
+                        <div class="placeholder">"preview"</div>
+                    }
+                </div>
                 <div id="code-editor">
-                    <textarea id="code-edit" name="code" placeholder="code" rows=1
+                    <textarea spellcheck=false id="code-edit" name={
+                        if preview_mode {"code-preview"} else {"code"}}
+                        placeholder="code" rows=1
                         required>code</textarea>
+                    <pre id="highlighter"></pre>
                     <span id="code-size">MAX_CODE_LENGTH</span>
                 </div>
-                <input type="submit" value="submit">
+                if !preview_mode {
+                    <input type="submit" value="submit">
+                }
                 <pre id="compiler-output"></pre>
             </form>
 
-            <div id="dep-list">
-                <input placeholder="search impoted deps.." oninput="filterCodeDeps(this, event)">
-                <section id="deps">
-                    "results show here..."
-                </section>
-            </div>
+            if !preview_mode {
+                <div id="dep-list">
+                    <input placeholder="search imported deps.." oninput="filterCodeDeps(this, event)">
+                    <section id="deps">
+                        "results show here..."
+                    </section>
+                </div>
+            }
 
-            <div>
-                !{include_str!("../zig-out/static/post.html")}
-            </div>
+            if !preview_mode {
+                <div>
+                    !{include_str!("../zig-out/static/post.html")}
+                </div>
+            }
         }
     }
 }
@@ -339,10 +408,11 @@ impl Post {
         Ok(Post {
             author: r.get(0)?,
             name: r.get(1)?,
-            timestamp: r.get(2)?,
-            code: r.get(3)?,
-            imports: r.get(4)?,
-            runs: r.get(5)?,
+            uses_wasm: r.get(2)?,
+            timestamp: r.get(3)?,
+            code: r.get(4)?,
+            imports: r.get(5)?,
+            runs: r.get(6)?,
             ..Default::default()
         })
     }
@@ -377,10 +447,13 @@ impl Post {
         }
 
         db::with(|db| {
-            if let Err(e) = db
-                .create_post
-                .insert((&data.name, &session.name, now(), &data.code))
-            {
+            if let Err(e) = db.create_post.insert((
+                &data.name,
+                &session.name,
+                &data.uses_wasm,
+                now(),
+                &data.code,
+            )) {
                 if let rusqlite::Error::SqliteFailure(e, _) = e {
                     if e.code == rusqlite::ErrorCode::ConstraintViolation {
                         data.error = Some("this name is already used");
@@ -417,7 +490,7 @@ impl Post {
         if data.error.is_some() {
             Err(data.render(&session))
         } else {
-            Ok(redirect("/profile"))
+            Ok(redirect(format!("/profile/{}", session.name)))
         }
     }
 }
@@ -432,6 +505,7 @@ impl fmt::Display for Post {
             runs,
             dependencies,
             code,
+            uses_wasm,
             ..
         } = self;
         write_html! { f <div class="preview" "data-author"=author "data-name"=name>
@@ -444,6 +518,7 @@ impl fmt::Display for Post {
                     name
                 </span>
                 <span apply="timestamp">timestamp</span>
+                <span class="target">{if *uses_wasm {"wasm"} else {"hbvm"}}</span>
                 for (name, count) in [include_str!("icons/download.svg"), include_str!("icons/run.svg"),  "deps"]
                     .iter()
                     .zip([imports, runs, dependencies])
@@ -849,15 +924,15 @@ impl<S> axum::extract::FromRequestParts<S> for Session {
             .into_iter()
             .find_map(|c| c.to_str().ok()?.trim().strip_prefix("id="))
             .map(|c| c.split_once(';').unwrap_or((c, "")).0)
-            .ok_or(err)?;
+            .ok_or(err.clone())?;
         let mut id = [0u8; 32];
-        parse_hex(value, &mut id).ok_or(err)?;
+        parse_hex(value, &mut id).ok_or(err.clone())?;
 
         let (name, expiration) = db::with(|db| {
             db.get_session
                 .query_row((id,), |r| Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?)))
                 .log("fetching session")
-                .ok_or(err)
+                .ok_or(err.clone())
         })?;
 
         if expiration < now() {
@@ -942,7 +1017,7 @@ mod db {
             login: "INSERT OR REPLACE INTO session (id, username, expiration) VALUES(?, ?, ?)",
             logout: "DELETE FROM session WHERE id = ?",
             get_session: "SELECT username, expiration FROM session WHERE id = ?",
-            get_user_posts: "SELECT author, name, timestamp, code, (
+            get_user_posts: "SELECT author, name, uses_wasm, timestamp, code, (
                 WITH RECURSIVE roots(name, author, code) AS (
                     SELECT name, author, code FROM post WHERE name = outher.name AND author = outher.author
                     UNION
@@ -966,7 +1041,7 @@ mod db {
                         AND roots.author = run.code_author
             ) AS runs FROM post as outher WHERE author = ? ORDER BY timestamp DESC",
             // TODO: we might want to cache the recursive queries
-            get_pots_before: "SELECT author, name, timestamp, code, (
+            get_pots_before: "SELECT author, name, uses_wasm, timestamp, code, (
                 WITH RECURSIVE roots(name, author, code) AS (
                     SELECT name, author, code FROM post WHERE name = outher.name AND author = outher.author
                     UNION
@@ -989,7 +1064,7 @@ mod db {
                     JOIN run ON roots.name = run.code_name
                         AND roots.author = run.code_author
             ) as runs FROM post AS outher WHERE timestamp < ?",
-            create_post: "INSERT INTO post (name, author, timestamp, code) VALUES(?, ?, ?, ?)",
+            create_post: "INSERT INTO post (name, author, uses_wasm, timestamp, code) VALUES(?, ?, ?, ?, ?)",
             fetch_deps: "
                 WITH RECURSIVE roots(name, author, code) AS (
                     SELECT name, author, code FROM post WHERE name = ? AND author = ?
@@ -1030,7 +1105,7 @@ mod db {
     }
 
     pub fn init() {
-        const SCHEMA_VERSION: usize = 0;
+        const SCHEMA_VERSION: usize = 1;
         const MIGRATIONS: &[&str] = &[include_str!("migrations/1.sql")];
 
         let db = rusqlite::Connection::open("db.sqlite").unwrap();
@@ -1041,19 +1116,21 @@ mod db {
             .unwrap();
 
         if schema_version != SCHEMA_VERSION {
+            db.pragma_update(None, "user_version", SCHEMA_VERSION)
+                .unwrap();
             for &mig in &MIGRATIONS[schema_version..] {
                 db.execute_batch(mig).expect(mig);
             }
-            db.pragma_update(None, "user_version", SCHEMA_VERSION)
-                .unwrap();
+
+            unreachable!("migration failed");
         }
 
         Queries::new(&db);
     }
 }
 
-fn redirect(to: &'static str) -> Redirect {
-    AppendHeaders([("hx-location", to)])
+fn redirect(to: impl Into<String>) -> Redirect {
+    AppendHeaders([("hx-location", to.into())])
 }
 
 trait PublicPage: Default {

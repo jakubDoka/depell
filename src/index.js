@@ -12,10 +12,14 @@ async function getHbcInstance() {
 
 const stack_pointer_offset = 1 << 20;
 
-/** @param {WebAssembly.Instance} instance @param {Post[]} packages @param {number} fuel
- * @returns {string} */
-function compileCode(instance, packages, fuel = 100) {
+/** @param {WebAssembly.Instance} instance
+ * @param {Post[]} packages
+ * @param {number} fuel
+ * @param {boolean} to_wasm
+ * @returns {string | Uint8Array} */
+function compileCode(instance, packages, fuel = 100, to_wasm = false) {
 	let {
+		WASM_BLOB,
 		INPUT, INPUT_LEN,
 		LOG_MESSAGES, LOG_MESSAGES_LEN,
 		memory, compile_and_run,
@@ -25,6 +29,7 @@ function compileCode(instance, packages, fuel = 100) {
 		&& memory instanceof WebAssembly.Memory
 		&& INPUT instanceof WebAssembly.Global
 		&& INPUT_LEN instanceof WebAssembly.Global
+		&& WASM_BLOB instanceof WebAssembly.Global
 		&& LOG_MESSAGES instanceof WebAssembly.Global
 		&& LOG_MESSAGES_LEN instanceof WebAssembly.Global
 		&& typeof compile_and_run === "function"
@@ -33,8 +38,46 @@ function compileCode(instance, packages, fuel = 100) {
 	const codeLength = packPosts(packages, new DataView(memory.buffer, INPUT.value));
 	new DataView(memory.buffer).setUint32(INPUT_LEN.value, codeLength, true);
 
-	runWasmFunction(instance, compile_and_run, fuel, packages.length);
+	runWasmFunction(instance, compile_and_run, fuel, packages.length, to_wasm);
+
+	if (to_wasm) {
+		const addr = new DataView(memory.buffer).getUint32(WASM_BLOB.value, true);
+		const len = new DataView(memory.buffer).getUint32(WASM_BLOB.value + 4, true);
+
+		if (len != 0) {
+			return new Uint8Array(memory.buffer, addr, len);
+		}
+	}
+
 	return bufToString(memory, LOG_MESSAGES, LOG_MESSAGES_LEN).trim();
+}
+
+/** @param {Uint8Array | string} result @param {HTMLPreElement} errors */
+async function runCode(result, errors) {
+	if (!(result instanceof Uint8Array)) {
+		errors.textContent = result;
+	} else {
+		let memory = undefined;
+		let stdout = "";
+
+		/** @type {WebAssembly.Instance} */
+		const module = (await WebAssembly.instantiate(result, {
+			env: {
+				/**@param {number} ptr @param {number} len */
+				log: function(ptr, len) {
+					stdout += new TextDecoder().decode(
+						new Uint8Array(memory.buffer, Number(ptr), Number(len)))
+				}
+			}
+		}))['instance'];
+		memory = module.exports.memory;
+		const { main } = module.exports;
+
+		if (!(typeof main === "function")) never();
+
+		const exit_code = main();
+		errors.textContent = stdout + "wasm exit code: " + exit_code;
+	}
 }
 
 /**@type{WebAssembly.Instance}*/ let fmtInstance;
@@ -263,7 +306,6 @@ async function fetchPackages(source, importDiff, errors, ctx) {
 			}
 		});
 	}
-
 }
 
 /** @param {HTMLElement} target */
@@ -271,11 +313,16 @@ async function bindCodeEdit(target) {
 	const edit = target.querySelector("#code-edit");
 	if (!(edit instanceof HTMLTextAreaElement)) return;
 
+
 	const codeSize = target.querySelector("#code-size");
+	const highlighter = target.querySelector("#highlighter");
 	const errors = target.querySelector("#compiler-output");
+	const useWasmCheck = target.querySelector("#use-wasm-check");
 	if (!(true
+		&& useWasmCheck instanceof HTMLInputElement
 		&& codeSize instanceof HTMLSpanElement
 		&& errors instanceof HTMLPreElement
+		&& highlighter instanceof HTMLPreElement
 	)) never();
 
 	const MAX_CODE_SIZE = parseInt(codeSize.innerHTML);
@@ -300,19 +347,30 @@ async function bindCodeEdit(target) {
 
 		loadCachedPackages(fmt, edit.value, ctx.keyBuf, packages, prevRoots);
 
-		errors.textContent = compileCode(hbc, packages);
-		const minified_size = modifyCode(fmt, edit.value, "minify")?.length;
-		if (minified_size) {
-			codeSize.textContent = (MAX_CODE_SIZE - minified_size) + "";
-			const perc = Math.min(100, Math.floor(100 * (minified_size / MAX_CODE_SIZE)));
+		const result = compileCode(hbc, packages, 100, useWasmCheck.checked);
+		runCode(result, errors);
+
+		const minifiedSize = modifyCode(fmt, edit.value, "minify")?.length;
+		if (minifiedSize) {
+			codeSize.textContent = (MAX_CODE_SIZE - minifiedSize) + "";
+			const perc = Math.min(100, Math.floor(100 * (minifiedSize / MAX_CODE_SIZE)));
 			codeSize.style.color = `color-mix(in srgb, light-dark(black, white), var(--error) ${perc}%)`;
 		}
 		timeout = 0;
 	};
 
+	useWasmCheck.addEventListener("input", () => {
+		if (timeout) clearTimeout(timeout);
+		timeout = setTimeout(onInput, debounce)
+	});
+
 	edit.addEventListener("input", () => {
 		if (timeout) clearTimeout(timeout);
 		timeout = setTimeout(onInput, debounce)
+		highlighter.textContent = edit.value;
+		fmtSync(fmt, highlighter, false);
+		// this is needed or the cursor goes outside
+		highlighter.innerHTML += "\n";
 	});
 	edit.dispatchEvent(new InputEvent("input"));
 }
@@ -348,13 +406,18 @@ const applyFns = {
 	fmt,
 };
 
-/**
- * @param {HTMLElement} target */
+/** @param {HTMLElement} target */
 async function fmt(target) {
+	fmtSync(await getFmtInstance(), target);
+}
+
+/**
+ * @param {WebAssembly.Instance} instance
+ * @param {HTMLElement} target */
+function fmtSync(instance, target, doFmt = true) {
 	const code = target.innerText;
-	const instance = await getFmtInstance();
 	const decoder = new TextDecoder('utf-8');
-	const fmt = modifyCode(instance, code, 'fmt');
+	const fmt = doFmt ? modifyCode(instance, code, 'fmt') : code;
 	if (typeof fmt !== "string") return;
 	const codeBytes = new TextEncoder().encode(fmt);
 	const tok = modifyCode(instance, fmt, 'tok');
@@ -440,8 +503,9 @@ function cacheInputs(target) {
 		for (const input of form.elements) {
 			if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
 				if ('password submit button'.includes(input.type)) continue;
+				if (input.hidden) continue;
 				const key = path + input.name;
-				input.value = localStorage.getItem(key) ?? '';
+				input.value = localStorage.getItem(key) ?? input.value;
 				input.addEventListener("input", () => localStorage.setItem(key, input.value));
 			} else {
 				console.warn("unhandled form element: ", input);
@@ -552,13 +616,18 @@ function runPost(target) {
 	if (!(code instanceof HTMLPreElement)) never();
 	const output = target.querySelector("pre[id=compiler-output]");
 	if (!(output instanceof HTMLPreElement)) never();
+	const targetEl = target.querySelector("span[class=target]");
+	if (!(targetEl instanceof HTMLSpanElement)) never();
+
+	const usesWasm = targetEl.innerText == "wasm";
 
 	Promise.all([getHbcInstance(), getFmtInstance()]).then(async ([hbc, fmt]) => {
 		const ctx = { keyBuf: [], prevParams: new Set() };
 		await fetchPackages(code.innerText ?? never(), new Set(), output, ctx);
 		const posts = [{ path: "this", code: "" }];
 		loadCachedPackages(fmt, code.innerText ?? never(), ctx.keyBuf, posts, new Set());
-		output.textContent = compileCode(hbc, posts);
+		const cd = compileCode(hbc, posts, 100, usesWasm);
+		runCode(cd, output);
 		output.hidden = false;
 	});
 

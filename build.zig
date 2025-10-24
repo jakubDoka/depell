@@ -7,12 +7,14 @@ pub fn buildWasm(
     exports: []const []const u8,
     check_step: *std.Build.Step,
 ) *std.Build.Step.InstallFile {
+    const debuging = true;
     const exe = b.addExecutable(.{
         .name = name,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/" ++ name ++ ".zig"),
             .target = hb.resolved_target,
-            .optimize = hb.optimize.?,
+            .optimize = if (!debuging) hb.optimize.? else .ReleaseSmall,
+            .strip = !debuging,
         }),
     });
 
@@ -107,6 +109,8 @@ pub fn build(b: *std.Build) !void {
 
             "PANIC_MESSAGE",
             "PANIC_MESSAGE_LEN",
+
+            "WASM_BLOB",
 
             "compile_and_run",
             "__stack_pointer",

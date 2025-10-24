@@ -34,6 +34,35 @@ body {
 	}
 }
 
+div.toggle {
+	display: inline-block;
+
+	label {
+		box-sizing: border-box;
+		display: inline-block;
+		padding: var(--small-gap);
+		background: var(--primary);
+		border: solid 2px var(--primary);
+		color: black;
+		font-weight: 600;
+		cursor: pointer;
+		user-select: none;
+	}
+
+	input:checked+label {
+		background: var(--secondary);
+		border: solid 2px var(--secondary);
+	}
+
+	label:hover {
+		border: solid 2px var(--secondary);
+	}
+
+	input:checked+label:hover {
+		border: solid 2px var(--primary);
+	}
+}
+
 div.preview {
 	margin: var(--small-gap) 0px;
 	display: flex;
@@ -141,11 +170,41 @@ code {
 	line-height: 1;
 }
 
+div.name-and-wasm-toggle {
+	display: flex;
+	gap: var(--small-gap);
+
+	>input,
+	>div.placeholder {
+		flex: 1;
+	}
+
+	>div.placeholder {
+		align-content: center;
+	}
+}
+
 div#code-editor {
 	display: flex;
 	position: relative;
 
 	textarea {
+		flex: 1;
+		caret-color: black;
+		position: absolute;
+		background: transparent;
+		color: transparent;
+		caret-color: black;
+		font-size: inherit;
+		top: 0;
+		left: 0;
+		right: 0;
+		inset: 0;
+		overflow: hidden;
+	}
+
+	pre#highlighter {
+		inset: 0;
 		flex: 1;
 	}
 
